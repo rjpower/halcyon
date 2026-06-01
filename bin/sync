@@ -1,0 +1,133 @@
+#!/usr/bin/env python3
+"""
+Clone/pull app repos listed in ../config/apps.toml, symlink each clone's .env
+to the canonical secret file under ../secrets/, and bring every app (plus the
+Caddy front door) up.
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import shutil
+import subprocess
+import sys
+import tomllib
+from pathlib import Path
+
+APPS_DIR = Path(__file__).resolve().parent.parent
+CONFIG_DIR = APPS_DIR / "config"
+SECRETS_DIR = APPS_DIR / "secrets"
+MANIFEST = CONFIG_DIR / "apps.toml"
+CADDY_COMPOSE = CONFIG_DIR / "docker-compose.yml"
+
+
+def repo_basename(repo: str) -> str:
+    tail = repo.rsplit("/", 1)[-1]
+    return tail[:-4] if tail.endswith(".git") else tail
+
+
+def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
+    print(f"$ {' '.join(cmd)}", file=sys.stderr)
+    return subprocess.run(cmd, check=True, **kw)
+
+
+def ensure_clone(name: str, app: dict, *, pull: bool) -> Path:
+    clone_dir = APPS_DIR / repo_basename(app["repo"])
+    if not clone_dir.exists():
+        run(["git", "clone", "--branch", app["branch"], app["repo"], str(clone_dir)])
+    elif pull:
+        run(["git", "-C", str(clone_dir), "pull", "--ff-only"])
+    workdir = clone_dir / app.get("path", ".")
+    if not (workdir / "docker-compose.yml").exists():
+        sys.exit(f"[{name}] no docker-compose.yml at {workdir}")
+    return workdir
+
+
+def ensure_secret(name: str) -> Path:
+    SECRETS_DIR.mkdir(mode=0o700, exist_ok=True)
+    os.chmod(SECRETS_DIR, 0o700)
+    secret = SECRETS_DIR / f"{name}.env"
+    if not secret.exists():
+        secret.touch(mode=0o600)
+        print(
+            f"[{name}] created empty {secret} (0600). "
+            "Populate it before the app will function.",
+            file=sys.stderr,
+        )
+    os.chmod(secret, 0o600)
+    return secret
+
+
+def link_env(workdir: Path, secret: Path) -> None:
+    """Symlink workdir/.env to the canonical secret file (relative target)."""
+    link = workdir / ".env"
+    target = Path(os.path.relpath(secret, workdir))
+    if link.is_symlink():
+        if Path(os.readlink(link)) == target:
+            return
+        link.unlink()
+    elif link.exists():
+        sys.exit(
+            f"{link} exists and is not a symlink — move its contents into {secret} "
+            "and delete the file, then re-run sync"
+        )
+    link.symlink_to(target)
+
+
+def ensure_web_network() -> None:
+    if subprocess.run(
+        ["docker", "network", "inspect", "web"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    ).returncode != 0:
+        run(["docker", "network", "create", "web"])
+
+
+def compose_up(workdir: Path) -> None:
+    run(["docker", "compose", "-f", str(workdir / "docker-compose.yml"), "up", "-d"])
+
+
+def bring_up_caddy() -> None:
+    run(["docker", "compose", "-f", str(CADDY_COMPOSE), "up", "-d"])
+    subprocess.run(
+        ["docker", "exec", "caddy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"],
+        check=False,
+    )
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("name", nargs="?", help="sync only this app (default: all)")
+    p.add_argument("--no-pull", action="store_true", help="skip git pull on existing clones")
+    p.add_argument("--pull-only", action="store_true", help="pull + relink env; skip docker compose up")
+    p.add_argument("--skip-caddy", action="store_true", help="don't touch the Caddy front door")
+    args = p.parse_args()
+
+    if not shutil.which("docker"):
+        sys.exit("docker not found on PATH")
+
+    with MANIFEST.open("rb") as fh:
+        apps: dict[str, dict] = tomllib.load(fh).get("apps", {})
+    if args.name:
+        if args.name not in apps:
+            sys.exit(f"unknown app: {args.name}")
+        apps = {args.name: apps[args.name]}
+
+    for name, app in apps.items():
+        print(f"=== {name} ===", file=sys.stderr)
+        workdir = ensure_clone(name, app, pull=not args.no_pull)
+        secret = ensure_secret(name)
+        link_env(workdir, secret)
+        if args.pull_only:
+            continue
+        compose_up(workdir)
+
+    if not args.pull_only and not args.skip_caddy:
+        ensure_web_network()
+        bring_up_caddy()
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

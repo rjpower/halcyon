@@ -1,0 +1,13 @@
+# Track only the orchestrator infra. Cloned app repos and secrets are local-only.
+*/
+!bin/
+!config/
+secrets/
+
+# Python / editor cruft that may land in bin/ or config/
+__pycache__/
+*.py[cod]
+.venv/
+.env
+.DS_Store
+*.swp

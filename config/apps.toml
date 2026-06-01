@@ -1,0 +1,26 @@
+# Multi-app manifest. `bin/sync` reads this; `bin/add` appends to it.
+#
+# Per app:
+#   repo      git URL (ssh or https)
+#   path      subdir within the clone where docker-compose.yml lives ("." for root)
+#   branch    branch to track
+#   container container_name from the app's compose (used by Caddyfile + override)
+#   port      port the container exposes (used by bin/add's Caddyfile block)
+#   cmd       optional override CMD passed through the entrypoint shim;
+#             leave empty to let docker use the image's default CMD
+
+[apps.blog]
+repo      = "git@github.com:rjpower/blog.git"
+path      = "."
+branch    = "main"
+container = "blog"
+port      = 8000
+cmd       = []
+
+[apps.kana-quiz]
+repo      = "git@github.com:rjpower/kana-quiz.git"
+path      = "."
+branch    = "main"
+container = "kana-quiz"
+port      = 8000
+cmd       = []

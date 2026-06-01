@@ -1,0 +1,9 @@
+rjp.io, www.rjp.io, taco.rjp.io {
+    encode zstd gzip
+    reverse_proxy blog:8000
+}
+
+kana.rjp.io {
+    encode zstd gzip
+    reverse_proxy kana-quiz:8000
+}
