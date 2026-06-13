@@ -1,9 +1,19 @@
 rjp.io, www.rjp.io, taco.rjp.io {
-    encode zstd gzip
-    reverse_proxy blog:8000
+	encode zstd gzip
+	reverse_proxy blog:8000
 }
 
 kana.rjp.io {
-    encode zstd gzip
-    reverse_proxy kana-quiz:8000
+	encode zstd gzip
+	reverse_proxy kana-quiz:8000
+}
+
+# loom is one server (the `weaver` container) reached under either host.
+weaver.rjp.io, loom.rjp.io {
+	encode zstd gzip
+	# loom streams SSE (/events) and a WebSocket terminal; -1 disables response
+	# buffering so neither stalls behind `encode`.
+	reverse_proxy weaver:7878 {
+		flush_interval -1
+	}
 }

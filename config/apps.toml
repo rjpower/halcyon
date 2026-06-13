@@ -24,3 +24,11 @@ branch    = "main"
 container = "kana-quiz"
 port      = 8000
 cmd       = []
+
+[apps.weaver]
+repo      = "git@github.com:rjpower/weaver.git"
+path      = "."
+branch    = "main"
+container = "weaver"
+port      = 7878
+cmd       = []
