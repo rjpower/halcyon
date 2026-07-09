@@ -24,3 +24,11 @@ branch    = "main"
 container = "kana-quiz"
 port      = 8000
 cmd       = []
+
+[apps.feedbot]
+repo      = "git@github.com:rjpower/feedbot.git"
+path      = "."
+branch    = "main"
+container = "feedbot"
+port      = 8000
+cmd       = []

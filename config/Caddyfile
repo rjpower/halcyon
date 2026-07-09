@@ -8,6 +8,11 @@ kana.rjp.io {
 	reverse_proxy kana-quiz:8000
 }
 
+feedbot.rjp.io {
+	encode zstd gzip
+	reverse_proxy feedbot:8000
+}
+
 # loom is one server (the `weaver` container) reached under either host.
 weaver.rjp.io, loom.rjp.io {
 	encode zstd gzip
