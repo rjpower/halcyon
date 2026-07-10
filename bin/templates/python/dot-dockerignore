@@ -1,0 +1,18 @@
+.git
+.gitignore
+
+# Build outputs — the image builds its own.
+.venv
+__pycache__
+*.egg-info
+
+# Secrets and local state.
+.env
+*.env
+secrets
+data
+
+# Not needed to build or run.
+README.md
+docker-compose.yml
+tests

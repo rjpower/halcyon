@@ -1,0 +1,27 @@
+# Deliberately no `ports:` — {{name}} stays on the shared `web` network and is
+# reachable only through halcyon's Caddy front door, which terminates TLS and
+# routes {{host}} here by container name.
+services:
+  {{name}}:
+    build: .
+    image: {{name}}:latest
+    container_name: {{container}}
+    restart: unless-stopped
+    expose:
+      - "{{port}}"
+    # halcyon symlinks secrets/{{name}}.env -> ./.env
+    env_file: .env
+    volumes:
+      # Anything that must survive a recreate. Drop this (and the `volumes:`
+      # block below) if {{name}} is stateless.
+      - {{volume}}:/data
+    networks:
+      - web
+    # The healthcheck comes from the image's own HEALTHCHECK; see Dockerfile.
+
+networks:
+  web:
+    external: true
+
+volumes:
+  {{volume}}:

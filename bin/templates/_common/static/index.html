@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{name}}</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #fbfaf7;
+        --ink: #17150f;
+        --faint: #8a8577;
+        --rule: #e2ded2;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #14130f;
+          --ink: #f2efe6;
+          --faint: #7d7869;
+          --rule: #2b2921;
+        }
+      }
+      body {
+        margin: 0;
+        min-height: 100dvh;
+        display: grid;
+        place-content: center;
+        gap: 1.2rem;
+        padding: 2rem;
+        background: var(--bg);
+        color: var(--ink);
+        font: 400 1rem/1.7 ui-serif, Georgia, "Times New Roman", serif;
+      }
+      h1 {
+        margin: 0;
+        font-size: clamp(2rem, 8vw, 3.4rem);
+        font-weight: 600;
+        letter-spacing: -0.03em;
+      }
+      p {
+        margin: 0;
+        max-width: 34rem;
+        color: var(--faint);
+      }
+      code {
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 0.85em;
+        border-bottom: 1px solid var(--rule);
+      }
+    </style>
+  </head>
+  <body>
+    <h1>{{name}}</h1>
+    <p>
+      {{description}} Replace this page with something worth reading. Health is at
+      <code>/healthz</code>; static files come from <code>static/</code>.
+    </p>
+  </body>
+</html>

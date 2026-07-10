@@ -1,0 +1,216 @@
+#!/usr/bin/env python3
+"""
+Stand up a new halcyon app, end to end.
+
+Scaffolds a working HTTP server (rust/axum or python/uv+fastapi) with its
+Dockerfile and compose stack, creates the GitHub repo and pushes the first
+commit, registers the app in apps.toml, adds its vhost to the Caddyfile, and
+hands off to `bin/sync` to build and serve it.
+
+    bin/new toybox                          # rust, https://toybox.rjp.io
+    bin/new toybox --lang python            # uv + fastapi
+    bin/new toybox --host tb.rjp.io --host toybox.rjp.io
+    bin/new toybox --no-repo --no-sync      # scaffold only, touch nothing else
+
+The one thing it cannot do is DNS: point the hostname at this server yourself.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tomllib
+from pathlib import Path
+
+HALCYON = Path(__file__).resolve().parent.parent
+TEMPLATES = Path(__file__).resolve().parent / "templates"
+CONFIG = HALCYON / "config"
+SECRETS = HALCYON / "secrets"
+MANIFEST = CONFIG / "apps.toml"
+CADDYFILE = CONFIG / "caddy" / "Caddyfile"
+
+NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+# The description lands in TOML, HTML, Rust doc comments and Markdown. Rather
+# than escape it four ways, keep it to characters that are inert in all four.
+DESC_RE = re.compile(r"^[^\"<>\n]*$")
+
+
+def run(cmd: list[str], *, cwd: Path | None = None, check: bool = True) -> subprocess.CompletedProcess:
+    print(f"  $ {' '.join(cmd)}", file=sys.stderr)
+    return subprocess.run(cmd, cwd=cwd, check=check, text=True)
+
+
+def render(text: str, subs: dict[str, str]) -> str:
+    for key, value in subs.items():
+        text = text.replace("{{" + key + "}}", value)
+    return text
+
+
+def scaffold(lang: str, dest: Path, subs: dict[str, str]) -> None:
+    """Copy _common/, then the language's own files over the top of it."""
+    for src_root in (TEMPLATES / "_common", TEMPLATES / lang):
+        for src in sorted(p for p in src_root.rglob("*") if p.is_file()):
+            rel = src.relative_to(src_root)
+            # `dot-gitignore` would otherwise be a live .gitignore inside the
+            # template tree; `__pkg__` is a directory named for the app.
+            parts = [
+                p.replace("dot-", ".", 1) if p.startswith("dot-") else p.replace("__pkg__", subs["pkg"])
+                for p in rel.parts
+            ]
+            out = dest.joinpath(*parts)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(render(src.read_text(), subs))
+
+
+def lockfile(lang: str, dest: Path) -> None:
+    """Both Dockerfiles install from a lockfile, so there has to be one."""
+    tool, cmd = ("cargo", ["cargo", "generate-lockfile"]) if lang == "rust" else ("uv", ["uv", "lock"])
+    if not shutil.which(tool):
+        sys.exit(f"{tool} not found on PATH — needed to lock {lang} dependencies")
+    run(cmd, cwd=dest)
+
+
+def git_init(dest: Path, name: str, lang: str) -> None:
+    run(["git", "init", "-b", "main"], cwd=dest)
+    run(["git", "add", "-A"], cwd=dest)
+    run(["git", "commit", "-q", "-m", f"Scaffold {name}, a {lang} app on halcyon"], cwd=dest)
+
+
+def create_repo(dest: Path, name: str, description: str, private: bool) -> str | None:
+    if not shutil.which("gh"):
+        sys.exit("gh not found on PATH — install it, or pass --no-repo")
+    run([
+        "gh", "repo", "create", name,
+        "--private" if private else "--public",
+        "--source", str(dest), "--remote", "origin", "--push",
+        "--description", description,
+    ])
+    p = subprocess.run(
+        ["git", "-C", str(dest), "remote", "get-url", "origin"],
+        check=False, text=True, capture_output=True,
+    )
+    return p.stdout.strip() or None
+
+
+def register(name: str, repo: str | None, port: int, hosts: list[str]) -> None:
+    quoted = ", ".join(f'"{h}"' for h in hosts)
+    lines = [f"\n[apps.{name}]", f'dir       = "{name}"']
+    if repo:
+        lines.append(f'repo      = "{repo}"')
+    lines += [
+        'branch    = "main"',
+        f'container = "{name}"',
+        f"port      = {port}",
+        f"hosts     = [{quoted}]",
+        "",
+    ]
+    with MANIFEST.open("a") as fh:
+        fh.write("\n".join(lines))
+
+    # Tabs, because `caddy fmt` uses them and the rest of this file already does.
+    with CADDYFILE.open("a") as fh:
+        fh.write(f"\n{', '.join(hosts)} {{\n\tencode zstd gzip\n\treverse_proxy {name}:{port}\n}}\n")
+
+
+def make_secret(name: str, env_prefix: str) -> Path:
+    SECRETS.mkdir(mode=0o700, exist_ok=True)
+    os.chmod(SECRETS, 0o700)
+    secret = SECRETS / f"{name}.env"
+    if not secret.exists():
+        secret.write_text(
+            f"# {name} secrets — KEY=VALUE per line, no quotes.\n"
+            f"# halcyon symlinks this file into the app as .env; it is never committed.\n"
+            f"# {env_prefix}_PORT and {env_prefix}_STATIC already have sane defaults.\n"
+        )
+    os.chmod(secret, 0o600)
+    return secret
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("name", help="app name, lower-kebab; also the container and image name")
+    p.add_argument("--lang", choices=["rust", "python"], default="rust")
+    p.add_argument("--host", action="append", metavar="FQDN", help="repeatable; default <name>.rjp.io")
+    p.add_argument("--port", type=int, default=8000)
+    p.add_argument("--description", default="A halcyon app.")
+    p.add_argument("--private", action="store_true", help="create the GitHub repo private")
+    p.add_argument("--from", dest="clone_from", metavar="URL", help="clone this repo instead of scaffolding")
+    p.add_argument("--no-repo", action="store_true", help="skip GitHub entirely; stay local")
+    p.add_argument("--no-sync", action="store_true", help="don't build or serve it yet")
+    args = p.parse_args()
+
+    name = args.name
+    if not NAME_RE.match(name):
+        sys.exit(f"name must match {NAME_RE.pattern}")
+    if not DESC_RE.match(args.description):
+        sys.exit('--description must not contain " < > or a newline')
+
+    dest = HALCYON / name
+    if dest.exists():
+        sys.exit(f"{dest} already exists")
+    with MANIFEST.open("rb") as fh:
+        if name in tomllib.load(fh).get("apps", {}):
+            sys.exit(f"'{name}' is already in {MANIFEST}")
+
+    hosts = args.host or [f"{name}.rjp.io"]
+    caddy_text = CADDYFILE.read_text()
+    for h in hosts:
+        if re.search(rf"^\s*{re.escape(h)}\b", caddy_text, re.M):
+            sys.exit(f"{h} already appears in {CADDYFILE}")
+
+    subs = {
+        "name": name,
+        "pkg": name.replace("-", "_"),
+        "container": name,
+        "host": hosts[0],
+        "port": str(args.port),
+        "env_prefix": name.upper().replace("-", "_"),
+        "volume": f"{name.replace('-', '_')}_data",
+        "description": args.description,
+    }
+
+    # Anything that goes wrong from here leaves a half-built directory, and the
+    # next run would refuse it as already existing. Take it back out.
+    repo = None
+    try:
+        if args.clone_from:
+            run(["git", "clone", args.clone_from, str(dest)])
+            if not (dest / "docker-compose.yml").exists():
+                sys.exit(f"{dest} has no docker-compose.yml — halcyon cannot run it")
+            repo = args.clone_from
+        else:
+            print(f"=== scaffolding {args.lang} app in {dest}", file=sys.stderr)
+            scaffold(args.lang, dest, subs)
+            lockfile(args.lang, dest)
+            git_init(dest, name, args.lang)
+            if not args.no_repo:
+                print("=== github", file=sys.stderr)
+                repo = create_repo(dest, name, args.description, args.private)
+    except BaseException:
+        if dest.exists():
+            shutil.rmtree(dest)
+        raise
+
+    print("=== registering", file=sys.stderr)
+    make_secret(name, subs["env_prefix"])
+    register(name, repo, args.port, hosts)
+
+    if not args.no_sync:
+        print("=== serving", file=sys.stderr)
+        run([str(HALCYON / "bin" / "sync"), name])
+
+    print(f"\n{name} is registered.")
+    print(f"  • Code:    {dest}")
+    print(f"  • Secrets: {SECRETS / f'{name}.env'}")
+    print(f"  • DNS:     point {', '.join(hosts)} at this server" + ("" if repo else " (no remote)"))
+    if args.no_sync:
+        print(f"  • Serve:   bin/sync {name}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

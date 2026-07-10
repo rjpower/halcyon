@@ -9,7 +9,12 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # The *directory*, not ./caddy/Caddyfile itself. A single-file bind mount
+      # pins the file's inode at container start, and every editor rewrites a
+      # file as a new inode — so caddy would go on reading the original forever
+      # while `caddy reload` reported success. Mounting the parent means a path
+      # lookup on each read, and edits are simply visible.
+      - ./caddy:/etc/caddy:ro
       - caddy_data:/data
       - caddy_config:/config
     networks:

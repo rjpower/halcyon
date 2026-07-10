@@ -1,34 +1,38 @@
-# Multi-app manifest. `bin/sync` reads this; `bin/add` appends to it.
+# Multi-app manifest. `bin/sync` reads this; `bin/new` appends to it.
 #
 # Per app:
-#   repo      git URL (ssh or https)
-#   path      subdir within the clone where docker-compose.yml lives ("." for root)
-#   branch    branch to track
-#   container container_name from the app's compose (used by Caddyfile + override)
-#   port      port the container exposes (used by bin/add's Caddyfile block)
-#   cmd       optional override CMD passed through the entrypoint shim;
-#             leave empty to let docker use the image's default CMD
+#   dir       checkout directory, relative to the halcyon root (default: the key)
+#   repo      git URL — only used to clone `dir` when it doesn't exist yet. The
+#             checkout, not the remote, is what gets built and shipped.
+#   branch    branch to clone at
+#   container container_name from the app's own docker-compose.yml
+#   port      the port that container listens on
+#   hosts     hostnames Caddy serves it under. `bin/sync` asserts Caddy really
+#             is serving each one; `bin/new` writes the vhost block.
+#
+# loom (weaver.rjp.io, loom.rjp.io) is deliberately absent: it is deployed out
+# of band, from its own checkout. `bin/sync` will list its hosts as unmanaged.
 
 [apps.blog]
+dir       = "blog"
 repo      = "git@github.com:rjpower/blog.git"
-path      = "."
 branch    = "main"
 container = "blog"
 port      = 8000
-cmd       = []
+hosts     = ["rjp.io", "www.rjp.io", "taco.rjp.io"]
 
 [apps.kana-quiz]
+dir       = "kana-quiz"
 repo      = "git@github.com:rjpower/kana-quiz.git"
-path      = "."
 branch    = "main"
 container = "kana-quiz"
 port      = 8000
-cmd       = []
+hosts     = ["kana.rjp.io"]
 
 [apps.feedbot]
+dir       = "feedbot"
 repo      = "git@github.com:rjpower/feedbot.git"
-path      = "."
 branch    = "main"
 container = "feedbot"
 port      = 8000
-cmd       = []
+hosts     = ["feedbot.rjp.io"]

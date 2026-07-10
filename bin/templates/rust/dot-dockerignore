@@ -1,0 +1,15 @@
+.git
+.gitignore
+
+# Build outputs — the image builds its own.
+target
+
+# Secrets and local state.
+.env
+*.env
+secrets
+data
+
+# Not needed to build or run.
+README.md
+docker-compose.yml

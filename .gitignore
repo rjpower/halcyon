@@ -1,8 +1,10 @@
-# Track only the orchestrator infra. Cloned app repos and secrets are local-only.
-*/
-!bin/
-!config/
-secrets/
+# Track only the orchestrator infra. App checkouts and secrets are local-only.
+# Anchored with a leading slash so these match *top-level* directories only —
+# unanchored `*/` also swallowed bin/templates/ and config/caddy/.
+/*/
+!/bin/
+!/config/
+/secrets/
 
 # Python / editor cruft that may land in bin/ or config/
 __pycache__/
