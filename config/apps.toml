@@ -36,3 +36,11 @@ branch    = "main"
 container = "feedbot"
 port      = 8000
 hosts     = ["feedbot.rjp.io"]
+
+[apps.spillbench]
+dir       = "spillbench"
+repo      = "git@github.com:rjpower/spillbench.git"
+branch    = "main"
+container = "spillbench"
+port      = 8000
+hosts     = ["spillbench.rjp.io"]

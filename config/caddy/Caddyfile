@@ -22,3 +22,8 @@ weaver.rjp.io, loom.rjp.io {
 		flush_interval -1
 	}
 }
+
+spillbench.rjp.io {
+	encode zstd gzip
+	reverse_proxy spillbench:8000
+}
