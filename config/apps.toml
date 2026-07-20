@@ -37,10 +37,5 @@ container = "feedbot"
 port      = 8000
 hosts     = ["feedbot.rjp.io"]
 
-[apps.spillbench]
-dir       = "spillbench"
-repo      = "git@github.com:rjpower/spillbench.git"
-branch    = "main"
-container = "spillbench"
-port      = 8000
-hosts     = ["spillbench.rjp.io"]
+# spillbench was retired 2026-07-20: its report moved into the blog. The host
+# spillbench.rjp.io stays in the Caddyfile as a redirect (unmanaged, like loom).

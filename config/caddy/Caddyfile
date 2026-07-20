@@ -23,7 +23,8 @@ weaver.rjp.io, loom.rjp.io {
 	}
 }
 
+# spillbench turned down 2026-07-20 — its report now lives in the blog. Keep the
+# host as a redirect so links already out there (RSS, shares) still resolve.
 spillbench.rjp.io {
-	encode zstd gzip
-	reverse_proxy spillbench:8000
+	redir https://rjp.io/blog/2026-07-19-register-deprivation permanent
 }
