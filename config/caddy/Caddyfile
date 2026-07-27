@@ -1,16 +1,121 @@
+# hyperbase's front door — the post-cutover Caddyfile.
+#
+# ***NOT APPLIED.*** This is the file that replaces
+# `halcyon/config/caddy/Caddyfile` at the cutover step that says so in
+# `docs/cutover.md`. Copying it into place is the first change a visitor can see
+# and it is the step the runbook calls irreversible-in-practice. Do not `caddy
+# reload` this from a deploy script.
+#
+# It runs in halcyon's existing caddy container, on halcyon's existing `web`
+# network, with halcyon's existing certificates — deliberately. Standing up a
+# second reverse proxy would mean a second ACME account, a second set of certs,
+# and a cutover whose first step is a DNS change with a TTL on it. Replacing one
+# file in a container that is already serving is a cutover whose rollback is
+# replacing it back.
+#
+# ---------------------------------------------------------------------------
+# What changed from halcyon's
+# ---------------------------------------------------------------------------
+#
+# halcyon routed four hostnames to four containers. hyperbase is **one SPA and
+# one bundle** — design §14 — so `hb.rjp.io`, `notes.rjp.io` and
+# `feedbot.rjp.io` are three hostnames in front of one `web` container. The
+# gateway carries a per-app host's path into that app's namespace, which is what
+# mounts notes at the root of `notes.rjp.io`; `hb.rjp.io` serves every route the
+# bundle carries.
+#
+# Three things stay exactly as they were:
+#
+#   * **blog** (`rjp.io`, `www.rjp.io`, `taco.rjp.io`) is untouched. It is not
+#     ported and this file is not the place to port it.
+#   * **kana-quiz** (`kana.rjp.io`) stays in halcyon as a foreign app: route plus
+#     session, nothing more (design §14). Its block below is byte-identical to
+#     halcyon's except for the comment.
+#   * **loom / weaver** and the **spillbench** redirect are deployed out of band
+#     and are copied across unchanged, because a Caddyfile that drops a host is a
+#     Caddyfile that turns it off.
+
+# ---------------------------------------------------------------------------
+# hyperbase
+# ---------------------------------------------------------------------------
+
+# Every hyperbase hostname is this and nothing else, so it is written once. A
+# second copy of the upstream is a copy that drifts, and the way it drifts is
+# one hostname keeping SSE alive through a redeploy while another does not.
+(hyperbase) {
+	encode zstd gzip
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
+	# The gateway streams SSE (the agent overlay, job progress) and serves
+	# exports that are tens of megabytes. -1 disables response buffering so
+	# neither stalls behind `encode` — the same flag loom needs, for the same
+	# reason, and the failure without it is a stream that arrives all at once
+	# when it finishes rather than one that never arrives at all, which is why
+	# it is easy to miss.
+	reverse_proxy web:8000 {
+		flush_interval -1
+
+		# `hb web` is one process; a redeploy replaces it, and for the second
+		# or two before the new one is listening Caddy should wait rather than
+		# hand back a 502.
+		lb_try_duration 5s
+		health_uri /healthz
+		health_interval 10s
+		health_timeout 2s
+	}
+}
+
+hb.rjp.io {
+	import hyperbase
+}
+
+# ---------------------------------------------------------------------------
+# The per-app hostnames
+# ---------------------------------------------------------------------------
+#
+# The same gateway, which serves each app in place: a navigation arriving on
+# `notes.rjp.io` has its path carried into `/notes/…` before anything routes it,
+# and the visitor gets a 200 from the address they asked for.
+#
+#   crates/hb-web/src/hosts.rs — HostMap::spa_path
+#
+# The mapping is derived from the registry, so **adding an app needs one entry
+# here and no rules**. It reads the app's home route from its `AppManifest`, so
+# `notes.rjp.io/` lands wherever notes declares its initial route to be, and it
+# leaves an already-namespaced path alone so `notes.rjp.io/notes/abc` stays
+# `/notes/abc`. `redir https://hb.rjp.io/notes{uri}` here would be a second copy
+# of that mapping, and a copy that drifts sends a visitor to a route the SPA
+# does not know, which renders an empty shell rather than a 404.
+#
+# A session belongs to the host it was created on: `__Host-hb_session` is
+# host-only by the prefix's own rule, so signing in on `notes.rjp.io` and on
+# `hb.rjp.io` are two sessions and two `core.sessions` rows. That is what keeps
+# the hyperbase session off `rjp.io` and `kana.rjp.io`.
+
+notes.rjp.io, feedbot.rjp.io {
+	import hyperbase
+}
+
+# ---------------------------------------------------------------------------
+# Still halcyon's
+# ---------------------------------------------------------------------------
+
 rjp.io, www.rjp.io, taco.rjp.io {
 	encode zstd gzip
 	reverse_proxy blog:8000
 }
 
+# kana-quiz is a *foreign app*: it stays in halcyon, it knows nothing about
+# hyperbase, and the interim support for it is deliberately thin — route plus
+# session, nothing more (design §14). "Plus session" is not implemented by
+# anything in this file and cannot be: sharing a session across two origins needs
+# either a cookie on `.rjp.io` that hyperbase does not set, or a token exchange
+# that does not exist. Today this is route and nothing more, and kana-quiz has no
+# login of its own, so nothing is broken by that — but it is the gap to close
+# before a second foreign app has one.
 kana.rjp.io {
 	encode zstd gzip
 	reverse_proxy kana-quiz:8000
-}
-
-feedbot.rjp.io {
-	encode zstd gzip
-	reverse_proxy feedbot:8000
 }
 
 # loom is one server (the `weaver` container) reached under either host.

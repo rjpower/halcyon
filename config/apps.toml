@@ -29,13 +29,9 @@ container = "kana-quiz"
 port      = 8000
 hosts     = ["kana.rjp.io"]
 
-[apps.feedbot]
-dir       = "feedbot"
-repo      = "git@github.com:rjpower/feedbot.git"
-branch    = "main"
-container = "feedbot"
-port      = 8000
-hosts     = ["feedbot.rjp.io"]
+# notes and feedbot moved to hyperbase 2026-07-27. Their hostnames are served by
+# hyperbase's gateway; leaving the entries here would have `bin/sync` rebuild and
+# restart containers nothing routes to.
 
 # spillbench was retired 2026-07-20: its report moved into the blog. The host
 # spillbench.rjp.io stays in the Caddyfile as a redirect (unmanaged, like loom).
