@@ -70,29 +70,28 @@ hb.rjp.io {
 }
 
 # ---------------------------------------------------------------------------
-# The per-app hostnames
+# The per-site hostnames
 # ---------------------------------------------------------------------------
 #
-# The same gateway, which serves each app in place: a navigation arriving on
-# `notes.rjp.io` has its path carried into `/notes/…` before anything routes it,
-# and the visitor gets a 200 from the address they asked for.
+# The same gateway. A site is a product with a hostname (design §3), and which
+# hostname belongs to which site is a row in `core.sites`, read by the door:
 #
-#   crates/hb-web/src/hosts.rs — HostMap::spa_path
+#   crates/hb-web/src/hosts.rs
 #
-# The mapping is derived from the registry, so **adding an app needs one entry
-# here and no rules**. It reads the app's home route from its `AppManifest`, so
-# `notes.rjp.io/` lands wherever notes declares its initial route to be, and it
-# leaves an already-namespaced path alone so `notes.rjp.io/notes/abc` stays
-# `/notes/abc`. `redir https://hb.rjp.io/notes{uri}` here would be a second copy
-# of that mapping, and a copy that drifts sends a visitor to a route the SPA
-# does not know, which renders an empty shell rather than a 404.
+# So **adding a site needs one entry here and no rules**: register the site with
+# its hostname and the door serves its bundle at the root of that hostname.
+# There is no path rewriting to keep in step, because there is no path prefix.
 #
 # A session belongs to the host it was created on: `__Host-hb_session` is
-# host-only by the prefix's own rule, so signing in on `notes.rjp.io` and on
+# host-only by the prefix's own rule, so signing in on `console.rjp.io` and on
 # `hb.rjp.io` are two sessions and two `core.sessions` rows. That is what keeps
 # the hyperbase session off `rjp.io` and `kana.rjp.io`.
 
-notes.rjp.io, feedbot.rjp.io {
+# `notes.rjp.io` is here for the same reason and by the same rule, even though
+# `notes` is a hosted site whose pages come out of a second process. Caddy does
+# not know that and must not: the door reads `upstream` off the site's row and
+# proxies to it, so a hosted site and a kernel site are one entry here.
+console.rjp.io, docs.rjp.io, notes.rjp.io, storybook.rjp.io {
 	import hyperbase
 }
 
