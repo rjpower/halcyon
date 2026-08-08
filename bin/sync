@@ -151,6 +151,20 @@ def ensure_web_network() -> None:
         run(["docker", "network", "create", "web"])
 
 
+def ensure_dev_database() -> None:
+    """Start the internal development DB before a dependent app is created."""
+    secret = SECRETS / "postgres.env"
+    if not secret.exists():
+        sys.exit(f"{secret} is missing — create it with POSTGRES_USER, POSTGRES_PASSWORD and POSTGRES_DB")
+    if out(["docker", "network", "inspect", "halcyon-db"]).returncode != 0:
+        run(["docker", "network", "create", "--internal", "halcyon-db"])
+    run(["docker", "compose", "-f", str(CONFIG / "postgres-compose.yml"), "up", "-d", "--wait"])
+    bootstrap = SECRETS / "notes-bootstrap.env"
+    if not bootstrap.exists():
+        sys.exit(f"{bootstrap} is missing")
+    run(["docker", "compose", "-f", str(CONFIG / "postgres-compose.yml"), "--profile", "bootstrap", "run", "--rm", "postgres-bootstrap"])
+
+
 def compose_up(d: Path, *, build: bool, recreate: bool) -> None:
     cmd = ["docker", "compose", "-f", str(d / "docker-compose.yml"), "up", "-d"]
     if build:
@@ -158,6 +172,21 @@ def compose_up(d: Path, *, build: bool, recreate: bool) -> None:
     if recreate:
         cmd.append("--force-recreate")
     run(cmd)
+
+
+def prepare_notes_database(d: Path, *, build: bool) -> None:
+    """Build Notes, then let its Rust binary migrate and create the first user."""
+    if build:
+        run(["docker", "compose", "-f", str(d / "docker-compose.yml"), "build", "notes"])
+    migrator = SECRETS / "notes-migrator.env"
+    if not migrator.exists():
+        sys.exit(f"{migrator} is missing")
+    base = [
+        "docker", "run", "--rm", "--network", "halcyon-db", "--env-file", str(migrator),
+        "--entrypoint", "/usr/local/bin/notes", "notes:latest", "db",
+    ]
+    run([*base, "migrate"])
+    run([*base, "init-user"])
 
 
 # ---- the front door -------------------------------------------------------
@@ -306,6 +335,8 @@ def main() -> int:
     # Every app's compose declares `web` as external, so it has to exist before
     # the first one comes up — not after the last one, as this script once did.
     ensure_web_network()
+    if "notes" in apps:
+        ensure_dev_database()
 
     # Everything cheap first, so a refusal below costs nothing and no app is
     # left half-deployed behind one that failed to build.
@@ -336,7 +367,12 @@ def main() -> int:
         print(f"  ! {name}: {count} uncommitted file(s) — deploying from the working tree", file=sys.stderr)
 
     for name, app in apps.items():
-        compose_up(app_dir(name, app), build=not args.no_build, recreate=args.recreate)
+        d = app_dir(name, app)
+        if name == "notes":
+            prepare_notes_database(d, build=not args.no_build)
+            compose_up(d, build=False, recreate=args.recreate)
+        else:
+            compose_up(d, build=not args.no_build, recreate=args.recreate)
 
     if not args.skip_caddy:
         print("=== front door", file=sys.stderr)

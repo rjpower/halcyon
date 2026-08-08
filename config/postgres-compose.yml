@@ -1,0 +1,39 @@
+# Development/test database infrastructure. It is intentionally not on `web`
+# and never binds a host port. Use `bin/db up` before starting dependent apps.
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.5-pg16-bookworm
+    container_name: halcyon-postgres
+    restart: unless-stopped
+    env_file: ../secrets/postgres.env
+    shm_size: 256mb
+    volumes:
+      - halcyon_postgres_data:/var/lib/postgresql/data
+    networks: [halcyon-db]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+  postgres-bootstrap:
+    image: pgvector/pgvector:0.8.5-pg16-bookworm
+    profiles: ["bootstrap"]
+    env_file:
+      - ../secrets/postgres.env
+      - ../secrets/notes-bootstrap.env
+    entrypoint: ["sh", "/bootstrap/bootstrap-notes.sh"]
+    volumes:
+      - ./postgres:/bootstrap:ro
+    networks: [halcyon-db]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+networks:
+  halcyon-db:
+    external: true
+    internal: true
+
+volumes:
+  halcyon_postgres_data:

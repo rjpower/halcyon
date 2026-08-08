@@ -1,10 +1,9 @@
-# hyperbase's front door — the post-cutover Caddyfile.
+# hyperbase's front door.
 #
-# ***NOT APPLIED.*** This is the file that replaces
-# `halcyon/config/caddy/Caddyfile` at the cutover step that says so in
-# `docs/cutover.md`. Copying it into place is the first change a visitor can see
-# and it is the step the runbook calls irreversible-in-practice. Do not `caddy
-# reload` this from a deploy script.
+# This is the source of `halcyon/config/caddy/Caddyfile`, which is the copy
+# caddy reads. Edit here, copy across, and reload — `docs/cutover.md` has the
+# check and the rollback. Do not `caddy reload` this from a deploy script: it is
+# the first change a visitor can see.
 #
 # It runs in halcyon's existing caddy container, on halcyon's existing `web`
 # network, with halcyon's existing certificates — deliberately. Standing up a
@@ -14,15 +13,13 @@
 # replacing it back.
 #
 # ---------------------------------------------------------------------------
-# What changed from halcyon's
+# How this differs from halcyon's
 # ---------------------------------------------------------------------------
 #
-# halcyon routed four hostnames to four containers. hyperbase is **one SPA and
-# one bundle** — design §14 — so `hb.rjp.io`, `notes.rjp.io` and
-# `feedbot.rjp.io` are three hostnames in front of one `web` container. The
-# gateway carries a per-app host's path into that app's namespace, which is what
-# mounts notes at the root of `notes.rjp.io`; `hb.rjp.io` serves every route the
-# bundle carries.
+# halcyon routes four hostnames to four containers. hyperbase routes every one
+# of its hostnames to the one `web` container, which reads `core.sites` to
+# decide which site answers on which hostname. `hb.rjp.io` is the deployment's
+# own front page, and each site has a hostname of its own.
 #
 # Three things stay exactly as they were:
 #
@@ -38,6 +35,32 @@
 # ---------------------------------------------------------------------------
 # hyperbase
 # ---------------------------------------------------------------------------
+
+# A hostname is registered in `core.sites` and nowhere else, so this file does
+# not list them. Caddy asks the kernel before it issues a certificate, and
+# `sites.hostname` answers 200 for a registered site or a live preview and 404
+# for everything else — the same two tables `crates/hb-web/src/door.rs` resolves
+# against, so a certificate cannot exist for a hostname the door then refuses.
+#
+# Listing them here as well would put the list in two places, and a list in two
+# places drifts in both directions at once: the file misses a hostname that is
+# live, the copy the container reads misses one that is registered, and copying
+# either over the other turns something off.
+#
+# The ask is what makes this safe under a wildcard DNS record. `*.rjp.io` is a
+# CNAME to this host, so every name resolves and anybody can ask for a
+# certificate for any of them; without the ask, on-demand issuance would let a
+# stranger spend this deployment's ACME rate limit at will.
+#
+# Caddy asks before it *issues or renews*, and not before it serves. A
+# certificate already in Caddy's storage is served while `hb web` is down, which
+# is what keeps a kernel restart off the TLS path. The exposure is a kernel
+# outage that lasts across a renewal window, which is thirty days wide.
+{
+	on_demand_tls {
+		ask http://web:8000/api/hb/v1/sites/hostname
+	}
+}
 
 # Every hyperbase hostname is this and nothing else, so it is written once. A
 # second copy of the upstream is a copy that drifts, and the way it drifts is
@@ -76,22 +99,27 @@ hb.rjp.io {
 # The same gateway. A site is a product with a hostname (design §3), and which
 # hostname belongs to which site is a row in `core.sites`, read by the door:
 #
-#   crates/hb-web/src/hosts.rs
+#   crates/hb-web/src/door.rs
 #
-# So **adding a site needs one entry here and no rules**: register the site with
-# its hostname and the door serves its bundle at the root of that hostname.
-# There is no path rewriting to keep in step, because there is no path prefix.
+# So **adding a site needs nothing here at all**: register the site with its
+# hostname and the door serves its bundle at the root of that hostname. There is
+# no path rewriting to keep in step, because there is no path prefix.
 #
 # A session belongs to the host it was created on: `__Host-hb_session` is
 # host-only by the prefix's own rule, so signing in on `console.rjp.io` and on
 # `hb.rjp.io` are two sessions and two `core.sessions` rows. That is what keeps
 # the hyperbase session off `rjp.io` and `kana.rjp.io`.
-
-# `notes.rjp.io` is here for the same reason and by the same rule, even though
-# `notes` is a hosted site whose pages come out of a second process. Caddy does
-# not know that and must not: the door reads `upstream` off the site's row and
-# proxies to it, so a hosted site and a kernel site are one entry here.
-console.rjp.io, docs.rjp.io, notes.rjp.io, storybook.rjp.io {
+#
+# This block matches last. Caddy routes a request to the most specific host
+# block that matches it, so every named block below — the blog, kana-quiz, loom,
+# the spillbench redirect — still wins for its own hostname and keeps the
+# certificate it already has. Only a hostname nothing else claims reaches here,
+# and only one `sites.hostname` says belongs to this deployment gets a
+# certificate.
+https:// {
+	tls {
+		on_demand
+	}
 	import hyperbase
 }
 
