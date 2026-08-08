@@ -8,6 +8,14 @@ services:
     ports:
       - "80:80"
       - "443:443"
+      # Compose defaults a bare "443:443" to TCP, but caddy serves HTTP/3 out of
+      # the box and advertises it to every client as `alt-svc: h3=":443"`. Without
+      # this line the udp socket is only *exposed*, never bound to the host, so
+      # browsers get pointed at a path that silently drops their packets. QUIC
+      # also keys a connection to a connection ID rather than the IP 4-tuple, so
+      # publishing it is what lets a phone survive a wifi<->cellular handoff
+      # without dropping in-flight requests. Needs `ufw allow 443/udp` too.
+      - "443:443/udp"
     volumes:
       # The *directory*, not ./caddy/Caddyfile itself. A single-file bind mount
       # pins the file's inode at container start, and every editor rewrites a
