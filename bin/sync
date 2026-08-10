@@ -7,6 +7,10 @@ and the working tree you can see is exactly what ships. So sync never pulls
 unless you ask, and it always *builds* — `docker compose up -d` on its own will
 cheerfully start a stale image and say nothing about it.
 
+Because the checkout is the deployment, uncommitted work is normal and sync has
+to cope with it: a bare `bin/sync` leaves any app with a dirty tree alone and
+reconciles the rest. Name the app (or pass --force) to deploy it anyway.
+
 Afterwards sync reconciles the Caddy front door and then asks Caddy, over its
 admin API, which hosts it is *actually* serving. A Caddyfile that was edited but
 never loaded is the exact failure this check exists to catch.
@@ -91,19 +95,13 @@ def git_state(d: Path) -> dict | None:
     }
 
 
-def ensure_checkout(name: str, app: dict, d: Path, *, pull: bool) -> None:
-    if not d.exists():
-        repo = app.get("repo")
-        if not repo:
-            sys.exit(f"[{name}] {d} is missing and apps.toml gives no `repo` to clone")
-        run(["git", "clone", "--branch", app.get("branch", "main"), repo, str(d)])
-    elif pull:
-        st = git_state(d)
-        if st and st["dirty"]:
-            sys.exit(f"[{name}] {st['dirty']} uncommitted file(s) — commit or stash before --pull")
-        run(["git", "-C", str(d), "pull", "--ff-only"])
-    if not (d / "docker-compose.yml").exists():
-        sys.exit(f"[{name}] no docker-compose.yml in {d}")
+def clone_if_missing(name: str, app: dict, d: Path) -> None:
+    if d.exists():
+        return
+    repo = app.get("repo")
+    if not repo:
+        sys.exit(f"[{name}] {d} is missing and apps.toml gives no `repo` to clone")
+    run(["git", "clone", "--branch", app.get("branch", "main"), repo, str(d)])
 
 
 def ensure_secret(name: str) -> Path:
@@ -312,10 +310,10 @@ def main() -> int:
     p.add_argument("name", nargs="?", help="only this app (default: all of them)")
     p.add_argument("--check", action="store_true", help="read-only: report drift, change nothing")
     p.add_argument("--no-build", action="store_true", help="start the existing image, don't rebuild")
-    p.add_argument("--pull", action="store_true", help="git pull --ff-only first (refused on a dirty tree)")
+    p.add_argument("--pull", action="store_true", help="git pull --ff-only first (skipped for a dirty tree)")
     p.add_argument("--recreate", action="store_true", help="force-recreate app containers")
     p.add_argument("--skip-caddy", action="store_true", help="leave the front door alone")
-    p.add_argument("--force", action="store_true", help="build every app even if its tree is dirty")
+    p.add_argument("--force", action="store_true", help="deploy every app, including ones with a dirty tree")
     args = p.parse_args()
 
     if not shutil.which("docker"):
@@ -338,35 +336,47 @@ def main() -> int:
     if "notes" in apps:
         ensure_dev_database()
 
-    # Everything cheap first, so a refusal below costs nothing and no app is
-    # left half-deployed behind one that failed to build.
-    dirty: list[tuple[str, int]] = []
+    # Everything cheap first, so a skip below costs nothing and no app is left
+    # half-deployed behind one that failed to build.
+    #
+    # Naming an app is a statement of intent, and deploying its working tree is
+    # the whole point. A bare `bin/sync` is a routine reconcile of everything,
+    # and it should never be the thing that ships work you never committed — so
+    # an app with uncommitted changes is passed over, not a reason to abort the
+    # whole run. Work in progress in one checkout is the normal state here.
+    #
+    # --no-build is no escape hatch: `compose up -d` applies the working tree's
+    # docker-compose.yml too, so an uncommitted mount or environment change
+    # lands on the running container even when the image doesn't move.
+    ready: dict[str, dict] = {}
+    skipped: list[tuple[str, int]] = []
     for name, app in apps.items():
         print(f"=== {name}", file=sys.stderr)
         d = app_dir(name, app)
-        ensure_checkout(name, app, d, pull=args.pull)
+        clone_if_missing(name, app, d)
+        st = git_state(d)
+        n_dirty = st["dirty"] if st else 0
+
+        if n_dirty and not (args.name or args.force):
+            print(f"  ! {n_dirty} uncommitted file(s) — leaving it alone", file=sys.stderr)
+            skipped.append((name, n_dirty))
+            continue
+
+        if args.pull:
+            if n_dirty:
+                # Pulling over uncommitted work is the one thing that can lose
+                # it, so the deploy goes ahead from the tree as it stands.
+                print(f"  ! {n_dirty} uncommitted file(s) — not pulling", file=sys.stderr)
+            else:
+                run(["git", "-C", str(d), "pull", "--ff-only"])
+        if not (d / "docker-compose.yml").exists():
+            sys.exit(f"[{name}] no docker-compose.yml in {d}")
         link_env(d, ensure_secret(name))
-        if (st := git_state(d)) and st["dirty"]:
-            dirty.append((name, st["dirty"]))
+        if n_dirty:
+            print(f"  ! {n_dirty} uncommitted file(s) — deploying from the working tree", file=sys.stderr)
+        ready[name] = app
 
-    # Naming an app is a statement of intent, and deploying its working tree is
-    # the whole point. A bare `bin/sync` is a routine reconcile of everything,
-    # and it should never be the thing that ships work you never committed.
-    #
-    # --no-build is no escape hatch here: `compose up -d` applies the working
-    # tree's docker-compose.yml too, so an uncommitted mount or environment
-    # change lands on the running container even when the image doesn't move.
-    if dirty and not (args.name or args.force):
-        listing = "\n".join(f"    {n:<12} {c} uncommitted file(s)" for n, c in dirty)
-        sys.exit(
-            f"refusing to deploy from a dirty working tree:\n{listing}\n"
-            f"Commit or stash, or name the app to say you mean it (bin/sync {dirty[0][0]}), "
-            "or pass --force."
-        )
-    for name, count in dirty:
-        print(f"  ! {name}: {count} uncommitted file(s) — deploying from the working tree", file=sys.stderr)
-
-    for name, app in apps.items():
+    for name, app in ready.items():
         d = app_dir(name, app)
         if name == "notes":
             prepare_notes_database(d, build=not args.no_build)
@@ -374,9 +384,16 @@ def main() -> int:
         else:
             compose_up(d, build=not args.no_build, recreate=args.recreate)
 
+    # Caddy is the front door for every declared host, deployed or not: an app
+    # left alone is still routed, and its container is still up from last time.
     if not args.skip_caddy:
         print("=== front door", file=sys.stderr)
         sync_caddy({h for a in apps.values() for h in hosts_of(a)}, note_unmanaged=not args.name)
+
+    if skipped:
+        print("\nleft alone — uncommitted changes:", file=sys.stderr)
+        for name, count in skipped:
+            print(f"  {name:<12} {count} file(s); commit, or `bin/sync {name}` to ship the tree", file=sys.stderr)
 
     return 0
 

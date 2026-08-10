@@ -20,9 +20,9 @@ Two consequences worth internalizing:
 - `bin/sync` **always builds**. `docker compose up -d` on its own will start a
   stale image and tell you nothing, which is the single most reliable way to
   spend an hour debugging a fix you already made.
-- `bin/sync` **never pulls** unless you pass `--pull`, which it refuses on a
-  dirty tree. Uncommitted work in an app directory is normal here, so sync says
-  so before building it rather than clobbering it.
+- `bin/sync` **never pulls** unless you pass `--pull`, and it skips the pull for
+  any tree with uncommitted work rather than clobbering it. Work in progress in
+  an app directory is normal here, so sync is built to leave it be.
 
 ## Layout
 
@@ -67,15 +67,17 @@ bin/sync --check        # read-only: what's drifted, what's down
 | -------------- | ------------------------------------------------------- |
 | `--check`      | Read-only report. Non-zero exit if anything is broken.  |
 | `--no-build`   | Start the existing image instead of rebuilding.         |
-| `--pull`       | `git pull --ff-only` first. Refused on a dirty tree.    |
+| `--pull`       | `git pull --ff-only` first. Skipped for a dirty tree.   |
 | `--recreate`   | Force-recreate the app containers.                      |
 | `--skip-caddy` | Leave the front door alone.                             |
-| `--force`      | Build every app even if its tree is dirty.              |
+| `--force`      | Deploy every app, including ones with a dirty tree.     |
 
 Naming an app is a statement of intent: `bin/sync blog` deploys blog's working
 tree, uncommitted changes and all, and says so. A bare `bin/sync` reconciles
-everything and **refuses** if any tree is dirty, because a routine reconcile
-should never be the thing that ships work you never committed.
+everything and **passes over** any app with a dirty tree, listing what it left
+alone at the end, because a routine reconcile should never be the thing that
+ships work you never committed. One app mid-edit doesn't stop the others from
+being brought up; `--force` deploys the lot.
 
 `--no-build` is not an escape hatch from that: `compose up -d` also applies the
 working tree's `docker-compose.yml`, so an uncommitted volume or environment
